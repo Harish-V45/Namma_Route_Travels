@@ -6,9 +6,12 @@ import com.nammaroute.model.BusType;
 import com.nammaroute.model.Passenger;
 import com.nammaroute.model.Seat;
 import com.nammaroute.model.TicketItem;
+import com.nammaroute.model.WaitlistEntry;
 import com.nammaroute.service.BookingService;
 import com.nammaroute.service.BookingService.CancellationResult;
 import com.nammaroute.service.BookingService.ManifestEntry;
+import com.nammaroute.service.BookingService.PromotedBooking;
+import com.nammaroute.service.BookingService.SeatFarePreview;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
@@ -31,13 +34,13 @@ public class ConsoleMenu {
 
     public void start() {
         System.out.println("==========================================");
-        System.out.println("   Welcome to NammaRoute Travels (v1.0)   ");
+        System.out.println("   Welcome to NammaRoute Travels (v2.0)   ");
         System.out.println("==========================================");
 
         boolean running = true;
         while (running) {
             printMainMenu();
-            int choice = readIntInRange("Choose an option (0-6): ", 0, 6);
+            int choice = readIntInRange("Choose an option (0-8): ", 0, 8);
             System.out.println();
 
             switch (choice) {
@@ -47,6 +50,8 @@ public class ConsoleMenu {
                 case 4 -> handleBookTickets();
                 case 5 -> handleCancelTickets();
                 case 6 -> handlePassengerManifest();
+                case 7 -> handleViewWaitlist();
+                case 8 -> handleTermsAndConditions();
                 case 0 -> {
                     running = false;
                     System.out.println("Thank you for using NammaRoute Travels. Goodbye!");
@@ -62,9 +67,11 @@ public class ConsoleMenu {
         System.out.println("1. View All Bus Services");
         System.out.println("2. Add New Bus Service");
         System.out.println("3. View Visual Seat Map");
-        System.out.println("4. Book Tickets");
+        System.out.println("4. Book Tickets (or Join Waitlist)");
         System.out.println("5. Cancel Tickets");
         System.out.println("6. Conductor Passenger Manifest");
+        System.out.println("7. View Bus Waitlist");
+        System.out.println("8. Terms & Conditions");
         System.out.println("0. Exit");
         System.out.println("------------------------------------------");
     }
@@ -77,20 +84,34 @@ public class ConsoleMenu {
         }
 
         System.out.println("=== AVAILABLE BUS SERVICES ===");
-        System.out.printf("%-8s | %-24s | %-16s | %-12s | %-9s | %s%n",
-                "Route ID", "Route", "Departure", "Bus Type", "Fare", "Seats Free");
-        System.out.println("-".repeat(92));
+        System.out.printf("%-8s | %-22s | %-16s | %-11s | %-9s | %-10s | %s%n",
+                "Route ID", "Route", "Departure", "Bus Type", "Base Fare", "Seats Free", "Occupancy");
+        System.out.println("-".repeat(108));
         for (Bus bus : buses) {
             String route = bus.getOrigin() + " -> " + bus.getDestination();
             String seatsFree = bus.getAvailableSeatCount() + " / " + bus.getBusType().getTotalSeats();
-            System.out.printf("%-8s | %-24s | %-16s | %-12s | Rs.%-6.0f | %s%n",
+            String occupancy = formatOccupancySummary(bus);
+            System.out.printf("%-8s | %-22s | %-16s | %-11s | Rs.%-6.0f | %-10s | %s%n",
                     bus.getRouteId(),
                     route,
                     bus.getFormattedDepartureTime(),
                     bus.getBusType().getDisplayName(),
                     bus.getBasePrice(),
-                    seatsFree);
+                    seatsFree,
+                    occupancy);
         }
+    }
+
+    private String formatOccupancySummary(Bus bus) {
+        double pct = bus.getOccupancyPercentage();
+        if (bus.getAvailableSeatCount() == 0) {
+            int wl = service.getWaitlistForBus(bus.getRouteId()).size();
+            return String.format("%.1f%% [FULL | WL: %d/%d]", pct, wl, BookingService.MAX_WAITLIST_PER_BUS);
+        }
+        if (bus.isSurgePricingActive()) {
+            return String.format("%.1f%% [SURGE +20%%]", pct);
+        }
+        return String.format("%.1f%%", pct);
     }
 
     private void handleAddBus() {
@@ -135,17 +156,28 @@ public class ConsoleMenu {
         System.out.println();
         System.out.printf("--- Bus %s: %s to %s (%s) ---%n",
                 bus.getRouteId(), bus.getOrigin(), bus.getDestination(), bus.getFormattedDepartureTime());
-        System.out.printf("Type: %s | Fare: Rs.%.2f | Available: %d / %d%n",
+        String pricingLabel = bus.isSurgePricingActive()
+                ? "SURGE PRICING ACTIVE (+20%)"
+                : "Normal Pricing";
+        System.out.printf("Type: %s | Occupancy: %.1f%% (%d/%d booked) | %s%n",
                 bus.getBusType().getDisplayName(),
-                bus.getBasePrice(),
-                bus.getAvailableSeatCount(),
-                bus.getBusType().getTotalSeats());
+                bus.getOccupancyPercentage(),
+                bus.getBookedSeatCount(),
+                bus.getBusType().getTotalSeats(),
+                pricingLabel);
+        if (bus.getBusType() == BusType.SEATER_2X2) {
+            double currentFare = service.calculateSeatFare(bus, bus.getSeats().get(0));
+            System.out.printf("Current Seat Fare: Rs.%.2f (Base: Rs.%.2f) | Available: %d%n",
+                    currentFare, bus.getBasePrice(), bus.getAvailableSeatCount());
+        } else {
+            System.out.printf("Base Fare: Rs.%.2f | Available: %d%n",
+                    bus.getBasePrice(), bus.getAvailableSeatCount());
+        }
         System.out.println("Available: [Seat No] | Booked: [XX]");
         System.out.println();
 
         List<Seat> seats = bus.getSeats();
         if (bus.getBusType() == BusType.SEATER_2X2) {
-            // 8 rows, 4 seats per row
             for (int row = 0; row < 8; row++) {
                 int base = row * 4;
                 System.out.printf("Row %d: %s %s   %s %s%n",
@@ -156,14 +188,28 @@ public class ConsoleMenu {
                         formatSeatCell(seats.get(base + 3), 2));
             }
         } else {
-            // 12 Lower berths (0..11) and 12 Upper berths (12..23), 4 rows of 2x1 per deck
             double lowerFare = service.calculateSeatFare(bus, seats.get(0));
             double upperFare = service.calculateSeatFare(bus, seats.get(12));
-            System.out.printf("Lower Deck (Rs.%.2f - 10%% extra):%n", lowerFare);
+            String surgeTag = bus.isSurgePricingActive() ? " + 20% Surge" : "";
+            System.out.printf("Lower Deck (Rs.%.2f - 10%% extra%s):%n", lowerFare, surgeTag);
             printSleeperDeck(seats, 0);
             System.out.println();
-            System.out.printf("Upper Deck (Rs.%.2f - Base fare):%n", upperFare);
+            System.out.printf("Upper Deck (Rs.%.2f - Base fare%s):%n", upperFare, surgeTag);
             printSleeperDeck(seats, 12);
+        }
+
+        List<String> femaleReserved = service.getFemaleReservedOpenSeats(bus);
+        if (!femaleReserved.isEmpty()) {
+            System.out.println();
+            System.out.println("Female Co-Passenger Reserved Seats (solo female seated nearby): "
+                    + String.join(", ", femaleReserved));
+        }
+
+        if (bus.getAvailableSeatCount() == 0) {
+            int wlCount = service.getWaitlistForBus(bus.getRouteId()).size();
+            System.out.println();
+            System.out.printf("Bus is 100%% FULL | Waitlist Queue: %d / %d%n",
+                    wlCount, BookingService.MAX_WAITLIST_PER_BUS);
         }
     }
 
@@ -194,7 +240,7 @@ public class ConsoleMenu {
 
         printSeatMap(bus);
         if (bus.getAvailableSeatCount() == 0) {
-            System.out.println("Sorry, this bus is completely sold out.");
+            handleFullBusWaitlistOffer(bus);
             return;
         }
 
@@ -217,7 +263,24 @@ public class ConsoleMenu {
             String name = readNonEmptyString("  Passenger Name: ");
             int age = readIntInRange("  Passenger Age (1-120): ", 1, 120);
             String gender = readGender("  Passenger Gender (M / F / Other): ");
-            passengers.add(new Passenger(name, age, gender));
+            Passenger passenger = new Passenger(name, age, gender);
+
+            try {
+                service.validateFemaleCoSeatForPassenger(bus.getRouteId(), validatedSeats, seatNo, passenger);
+            } catch (IllegalArgumentException e) {
+                System.out.println();
+                System.out.println(e.getMessage());
+                return;
+            }
+            passengers.add(passenger);
+        }
+
+        List<SeatFarePreview> farePreviews = service.previewSeatFares(bus.getRouteId(), validatedSeats);
+        printPreBookingFareSummary(bus, farePreviews, passengers);
+        String confirm = readNonEmptyString("Confirm booking? (Y/N): ");
+        if (!confirm.equalsIgnoreCase("Y") && !confirm.equalsIgnoreCase("YES")) {
+            System.out.println("Booking cancelled by user.");
+            return;
         }
 
         try {
@@ -228,11 +291,75 @@ public class ConsoleMenu {
         }
     }
 
+    private void handleFullBusWaitlistOffer(Bus bus) {
+        List<WaitlistEntry> existing = service.getWaitlistForBus(bus.getRouteId());
+        System.out.println();
+        System.out.printf("Bus %s is currently 100%% full (Waitlist: %d / %d).%n",
+                bus.getRouteId(), existing.size(), BookingService.MAX_WAITLIST_PER_BUS);
+
+        if (existing.size() >= BookingService.MAX_WAITLIST_PER_BUS) {
+            System.out.println("Sorry, the waitlist is also full. Please check another bus.");
+            return;
+        }
+
+        String join = readNonEmptyString("Would you like to join the Waitlist? (Y/N): ");
+        if (!join.equalsIgnoreCase("Y") && !join.equalsIgnoreCase("YES")) {
+            return;
+        }
+
+        System.out.println();
+        System.out.println("Enter passenger details for Waitlist:");
+        String name = readNonEmptyString("  Passenger Name: ");
+        int age = readIntInRange("  Passenger Age (1-120): ", 1, 120);
+        String gender = readGender("  Passenger Gender (M / F / Other): ");
+
+        try {
+            int position = service.joinWaitlist(bus.getRouteId(), new Passenger(name, age, gender));
+            System.out.println("------------------------------------------");
+            System.out.println("Added to Waitlist!");
+            System.out.println("Route          : " + bus.getRouteId() + " (" + bus.getOrigin() + " to " + bus.getDestination() + ")");
+            System.out.println("Passenger      : " + name + " (" + age + ", " + gender + ")");
+            System.out.println("Queue Position : #" + position + " of " + BookingService.MAX_WAITLIST_PER_BUS);
+            System.out.println("You will be auto-promoted if an eligible seat opens up.");
+            System.out.println("------------------------------------------");
+        } catch (IllegalArgumentException | IOException e) {
+            System.out.println("Could not join waitlist: " + e.getMessage());
+        }
+    }
+
+    private void printPreBookingFareSummary(Bus bus, List<SeatFarePreview> previews, List<Passenger> passengers) {
+        System.out.println();
+        System.out.println("----------- FARE CONFIRMATION -----------");
+        System.out.printf("Route: %s | Current Occupancy: %.1f%%%n",
+                bus.getRouteId(), bus.getOccupancyPercentage());
+
+        boolean anySurge = false;
+        double total = 0.0;
+        for (int i = 0; i < previews.size(); i++) {
+            SeatFarePreview p = previews.get(i);
+            Passenger passenger = passengers.get(i);
+            total += p.finalFare();
+            if (p.surgeApplied()) {
+                anySurge = true;
+                System.out.printf("  Seat %-4s (%s) -> Rs.%.2f [SURGE +20%% applied; Normal: Rs.%.2f]%n",
+                        p.seatNumber(), passenger.getName(), p.finalFare(), p.normalFare());
+            } else {
+                System.out.printf("  Seat %-4s (%s) -> Rs.%.2f%n",
+                        p.seatNumber(), passenger.getName(), p.finalFare());
+            }
+        }
+        if (anySurge) {
+            System.out.println("Note: Dynamic Surge Pricing (+20%) is active because occupancy reached 70% or higher.");
+        }
+        System.out.printf("Total Amount Payable: Rs.%.2f%n", total);
+        System.out.println("-----------------------------------------");
+    }
+
     private void printBookingReceipt(Bus bus, Booking booking) {
         System.out.println();
-        System.out.println("==========================================");
-        System.out.println("             BOOKING RECEIPT              ");
-        System.out.println("==========================================");
+        System.out.println("====================================================");
+        System.out.println("                  BOOKING RECEIPT                   ");
+        System.out.println("====================================================");
         System.out.println("PNR Number  : " + booking.getPnr());
         System.out.println("Route       : " + bus.getRouteId() + " (" + bus.getOrigin() + " to " + bus.getDestination() + ")");
         System.out.println("Departure   : " + bus.getFormattedDepartureTime());
@@ -297,6 +424,17 @@ public class ConsoleMenu {
             System.out.printf("Refund Amount   : Rs.%.2f (90%% of original fare)%n", result.refundAmount());
             System.out.println("Booking Status  : " + (result.fullyCancelled() ? "Fully Cancelled" : "Partially Active"));
             System.out.println("------------------------------------------");
+
+            if (!result.promotions().isEmpty()) {
+                System.out.println();
+                System.out.println("=== WAITLIST AUTO-PROMOTION ===");
+                for (PromotedBooking promo : result.promotions()) {
+                    Passenger p = promo.passenger();
+                    System.out.printf("Seat %-4s assigned to %s (%d, %s) | New PNR: %s | Fare: Rs.%.2f%n",
+                            promo.seatNumber(), p.getName(), p.getAge(), p.getGender(), promo.pnr(), promo.fare());
+                }
+                System.out.println("===============================");
+            }
         } catch (IllegalArgumentException | IOException e) {
             System.out.println("Cancellation failed: " + e.getMessage());
         }
@@ -332,8 +470,82 @@ public class ConsoleMenu {
             }
         }
         System.out.println("-".repeat(54));
-        System.out.printf("Total Booked: %d | Available: %d%n",
-                bus.getBookedSeatCount(), bus.getAvailableSeatCount());
+        System.out.printf("Total Booked: %d | Available: %d | Occupancy: %.1f%%%n",
+                bus.getBookedSeatCount(), bus.getAvailableSeatCount(), bus.getOccupancyPercentage());
+    }
+
+    private void handleViewWaitlist() {
+        String routeId = readNonEmptyString("Enter Bus Route ID: ");
+        Bus bus = service.findBusById(routeId);
+        if (bus == null) {
+            System.out.println("Error: Bus route '" + routeId + "' not found.");
+            return;
+        }
+
+        List<WaitlistEntry> entries = service.getWaitlistForBus(bus.getRouteId());
+        System.out.println();
+        System.out.printf("=== WAITLIST QUEUE (FIFO): %s (%s -> %s) ===%n",
+                bus.getRouteId(), bus.getOrigin(), bus.getDestination());
+        if (entries.isEmpty()) {
+            System.out.printf("Waitlist is empty (0 / %d).%n", BookingService.MAX_WAITLIST_PER_BUS);
+            return;
+        }
+
+        System.out.printf("%-3s | %-20s | %-3s | %-6s | %s%n",
+                "Pos", "Passenger Name", "Age", "Gender", "Joined At");
+        System.out.println("-".repeat(60));
+        for (int i = 0; i < entries.size(); i++) {
+            WaitlistEntry entry = entries.get(i);
+            Passenger p = entry.getPassenger();
+            System.out.printf("%-3d | %-20s | %-3d | %-6s | %s%n",
+                    i + 1,
+                    p.getName(),
+                    p.getAge(),
+                    p.getGender(),
+                    entry.getJoinedAt().format(Bus.DATE_TIME_FORMAT));
+        }
+        System.out.println("-".repeat(60));
+        System.out.printf("Total Waiting: %d / %d%n", entries.size(), BookingService.MAX_WAITLIST_PER_BUS);
+    }
+
+    private void handleTermsAndConditions() {
+        System.out.println("====================================================");
+        System.out.println("      NAMMAROUTE TRAVELS - TERMS & CONDITIONS       ");
+        System.out.println("====================================================");
+        System.out.println("1. Cancellation & Refund Policy:");
+        System.out.println("   - Passengers receive a 90% refund of the original fare");
+        System.out.println("     paid for each cancelled seat (10% cancellation fee).");
+        System.out.println("   - Both full PNR cancellation and partial seat");
+        System.out.println("     cancellation from a multi-seat PNR are supported.");
+        System.out.println();
+        System.out.println("2. Waitlist & Auto-Promotion (FIFO Queue):");
+        System.out.println("   - Waitlist opens only when a bus is 100% full (0 seats");
+        System.out.println("     free), holding up to 5 passengers per bus in FIFO order.");
+        System.out.println("   - When a confirmed passenger cancels, the freed seat is");
+        System.out.println("     automatically assigned to the first eligible waitlisted");
+        System.out.println("     passenger and a confirmed PNR is generated.");
+        System.out.println("   - Smart Safety Check: If the freed seat is next to a");
+        System.out.println("     solo female passenger and Waitlist #1 is non-female,");
+        System.out.println("     Waitlist #1 stays at the front of the queue and the");
+        System.out.println("     first eligible female passenger in line is promoted.");
+        System.out.println();
+        System.out.println("3. Ladies Co-Passenger Safety Rule:");
+        System.out.println("   - In any 2-seat pair (e.g., 1A/1B, 1C/1D, or double");
+        System.out.println("     sleeper berths), if one seat is booked by a solo");
+        System.out.println("     female passenger, the adjacent seat can only be booked");
+        System.out.println("     by another female passenger.");
+        System.out.println("   - Group / Family Exception: Booking both seats in a pair");
+        System.out.println("     together on the same PNR is allowed for all genders.");
+        System.out.println();
+        System.out.println("4. Dynamic Surge & Sleeper Berth Pricing:");
+        System.out.println("   - Lower sleeper berths carry a 10% extra charge over");
+        System.out.println("     the base fare; upper berths & seater seats use base fare.");
+        System.out.println("   - When bus occupancy reaches 70% or more, remaining");
+        System.out.println("     seats automatically carry a 20% dynamic surge.");
+        System.out.println("   - Existing tickets keep their booked price. If");
+        System.out.println("     cancellations bring occupancy below 70%, new bookings");
+        System.out.println("     return to normal pricing.");
+        System.out.println("====================================================");
     }
 
     private List<String> parseSeatList(String rawInput) {

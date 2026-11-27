@@ -6,6 +6,7 @@ import com.nammaroute.model.BusType;
 import com.nammaroute.model.Passenger;
 import com.nammaroute.model.Seat;
 import com.nammaroute.model.TicketItem;
+import com.nammaroute.model.WaitlistEntry;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -23,13 +24,16 @@ import java.util.Map;
 public class CsvStorage {
     private static final String BUSES_HEADER = "routeId,origin,destination,departureTime,basePrice,busType";
     private static final String BOOKINGS_HEADER = "pnr,routeId,bookingTime,seatNumber,passengerName,age,gender,fare";
+    private static final String WAITLIST_HEADER = "routeId,joinedAt,passengerName,age,gender";
 
     private final Path busesFile;
     private final Path bookingsFile;
+    private final Path waitlistFile;
 
     public CsvStorage(Path dataDirectory) {
         this.busesFile = dataDirectory.resolve("buses.csv");
         this.bookingsFile = dataDirectory.resolve("bookings.csv");
+        this.waitlistFile = dataDirectory.resolve("waitlist.csv");
     }
 
     public boolean busesFileExists() {
@@ -127,13 +131,41 @@ public class CsvStorage {
         return bookings;
     }
 
-    public void saveAll(List<Bus> buses, List<Booking> bookings) throws IOException {
+    public List<WaitlistEntry> loadWaitlist() throws IOException {
+        List<WaitlistEntry> waitlist = new ArrayList<>();
+        if (!Files.exists(waitlistFile)) {
+            return waitlist;
+        }
+
+        List<String> lines = Files.readAllLines(waitlistFile, StandardCharsets.UTF_8);
+        for (int i = 1; i < lines.size(); i++) {
+            String line = lines.get(i).trim();
+            if (line.isEmpty()) {
+                continue;
+            }
+            List<String> fields = parseCsvLine(line);
+            if (fields.size() < 5) {
+                continue;
+            }
+            String routeId = fields.get(0).toUpperCase();
+            LocalDateTime joinedAt = LocalDateTime.parse(fields.get(1), Bus.DATE_TIME_FORMAT);
+            String passengerName = fields.get(2);
+            int age = Integer.parseInt(fields.get(3));
+            String gender = fields.get(4);
+
+            waitlist.add(new WaitlistEntry(routeId, joinedAt, new Passenger(passengerName, age, gender)));
+        }
+        return waitlist;
+    }
+
+    public void saveAll(List<Bus> buses, List<Booking> bookings, List<WaitlistEntry> waitlist) throws IOException {
         Path parent = busesFile.getParent();
         if (parent != null) {
             Files.createDirectories(parent);
         }
         saveBuses(buses);
         saveBookings(bookings);
+        saveWaitlist(waitlist);
     }
 
     private void saveBuses(List<Bus> buses) throws IOException {
@@ -172,6 +204,22 @@ public class CsvStorage {
             }
         }
         Files.write(bookingsFile, lines, StandardCharsets.UTF_8);
+    }
+
+    private void saveWaitlist(List<WaitlistEntry> waitlist) throws IOException {
+        List<String> lines = new ArrayList<>();
+        lines.add(WAITLIST_HEADER);
+        for (WaitlistEntry entry : waitlist) {
+            Passenger p = entry.getPassenger();
+            lines.add(String.join(",",
+                    escapeCsv(entry.getRouteId()),
+                    escapeCsv(entry.getJoinedAt().format(Bus.DATE_TIME_FORMAT)),
+                    escapeCsv(p.getName()),
+                    String.valueOf(p.getAge()),
+                    escapeCsv(p.getGender())
+            ));
+        }
+        Files.write(waitlistFile, lines, StandardCharsets.UTF_8);
     }
 
     private static String escapeCsv(String value) {

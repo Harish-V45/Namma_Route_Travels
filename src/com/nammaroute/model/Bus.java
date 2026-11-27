@@ -121,4 +121,48 @@ public class Bus {
     public int getBookedSeatCount() {
         return seats.size() - getAvailableSeatCount();
     }
+
+    public double getOccupancyPercentage() {
+        if (seats.isEmpty()) {
+            return 0.0;
+        }
+        return (getBookedSeatCount() * 100.0) / seats.size();
+    }
+
+    public boolean isSurgePricingActive() {
+        return getOccupancyPercentage() >= 70.0;
+    }
+
+    /**
+     * Returns the adjacent seat number in a 2-seat pair, or null if the seat is a solo berth.
+     */
+    public String getPartnerSeatNumber(String seatNumber) {
+        Seat seat = findSeat(seatNumber);
+        if (seat == null) {
+            return null;
+        }
+        String normalized = seat.getSeatNumber();
+        if (busType == BusType.SEATER_2X2) {
+            String row = normalized.substring(0, normalized.length() - 1);
+            char col = normalized.charAt(normalized.length() - 1);
+            return switch (col) {
+                case 'A' -> row + "B";
+                case 'B' -> row + "A";
+                case 'C' -> row + "D";
+                case 'D' -> row + "C";
+                default -> null;
+            };
+        } else {
+            // 2x1 Sleeper: 1&2, 4&5, 7&8, 10&11 are pairs; 3, 6, 9, 12 are single berths
+            String deck = normalized.substring(0, 1);
+            int num = Integer.parseInt(normalized.substring(1));
+            int mod = num % 3;
+            if (mod == 1) {
+                return deck + (num + 1);
+            } else if (mod == 2) {
+                return deck + (num - 1);
+            }
+            return null;
+        }
+    }
 }
